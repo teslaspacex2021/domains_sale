@@ -1,17 +1,16 @@
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
-const { google } = require('googleapis');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();  // 加载.env文件
 
 // 添加环境变量检查
 console.log('Environment variables check:');
-console.log('MAIL_USER:', process.env.MAIL_USER ? '✓ Set' : '✗ Missing');
-console.log('GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID ? '✓ Set' : '✗ Missing');
-console.log('GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? '✓ Set' : '✗ Missing');
-console.log('GOOGLE_REDIRECT_URI:', process.env.GOOGLE_REDIRECT_URI ? '✓ Set' : '✗ Missing');
-console.log('GOOGLE_REFRESH_TOKEN:', process.env.GOOGLE_REFRESH_TOKEN ? '✓ Set' : '✗ Missing');
+console.log('EMAIL_HOST:', process.env.EMAIL_HOST ? '✓ Set' : '✗ Missing');
+console.log('EMAIL_PORT:', process.env.EMAIL_PORT ? '✓ Set' : '✗ Missing');
+console.log('EMAIL_USER:', process.env.EMAIL_USER ? '✓ Set' : '✗ Missing');
+console.log('EMAIL_PASSWORD:', process.env.EMAIL_PASSWORD ? '✓ Set' : '✗ Missing');
+console.log('EMAIL_FROM:', process.env.EMAIL_FROM ? '✓ Set' : '✗ Missing');
 console.log('RECEIVER_EMAIL:', process.env.RECEIVER_EMAIL ? '✓ Set' : '✗ Missing');
 
 const app = express();
@@ -60,6 +59,26 @@ const limiter = rateLimit({
 // 应用 limiter 到邮件路由
 app.use('/send-email', limiter);
 
+// 创建 SMTP 邮件传输器
+const transporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST,
+    port: parseInt(process.env.EMAIL_PORT),
+    secure: true, // 使用 SSL
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASSWORD
+    }
+});
+
+// 验证 SMTP 连接
+transporter.verify(function(error, success) {
+    if (error) {
+        console.error('SMTP connection error:', error);
+    } else {
+        console.log('SMTP server is ready to send emails');
+    }
+});
+
 // 邮件发送路由
 app.post('/send-email', async (req, res) => {
     try {
@@ -104,61 +123,51 @@ app.post('/send-email', async (req, res) => {
             });
         }
 
-        // 获取新的 access token
-        const tokens = await oauth2Client.getAccessToken();
-        console.log('Access token obtained');
-
-        // 获取 Gmail API 实例
-        const gmail = google.gmail({ 
-            version: 'v1', 
-            auth: oauth2Client,
-            timeout: 10000  // 10 秒超时
-        });
-
         // 构建邮件内容
-        const emailContent = `From: "${name}" <${process.env.MAIL_USER}>
-To: ${process.env.RECEIVER_EMAIL}
-Subject: =?UTF-8?B?${Buffer.from('新域名购买咨询').toString('base64')}?=
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: base64
+        const mailOptions = {
+            from: `"域名咨询" <${process.env.EMAIL_FROM}>`,
+            to: process.env.RECEIVER_EMAIL,
+            subject: '新域名购买咨询',
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px;">新域名购买咨询</h2>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold; width: 100px;">姓名:</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #eee;">${name}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold;">邮箱:</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #eee;"><a href="mailto:${email}">${email}</a></td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold;">电话:</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #eee;">${phone || '未提供'}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold;">留言:</td>
+                            <td style="padding: 10px; border-bottom: 1px solid #eee;">${message}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 10px; font-weight: bold;">发送时间:</td>
+                            <td style="padding: 10px;">${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</td>
+                        </tr>
+                    </table>
+                </div>
+            `
+        };
 
-${Buffer.from(`
-姓名: ${name}
-电话: ${phone || '未提供'}
-邮箱: ${email}
-留言: ${message}
-发送时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
-`).toString('base64')}`;
-
-        // 转换为 Base64 URL 格式
-        const encodedEmail = Buffer.from(emailContent)
-            .toString('base64')
-            .replace(/\+/g, '-')
-            .replace(/\//g, '_')
-            .replace(/=+$/, '');
-
-        // 使用 Gmail API 发送邮件
-        const result = await gmail.users.messages.send({
-            userId: 'me',
-            requestBody: {
-                raw: encodedEmail
-            }
-        });
-
-        console.log('Email sent successfully:', result.data);
+        // 发送邮件
+        const result = await transporter.sendMail(mailOptions);
+        console.log('Email sent successfully:', result.messageId);
         res.json({ success: true });
+
     } catch (error) {
-        console.error('Detailed email error:', {
+        console.error('Email send error:', {
             message: error.message,
             name: error.name,
-            code: error.code,
-            response: error.response?.data
+            code: error.code
         });
-
-        // 特定错误处理
-        if (error.message === 'invalid_grant') {
-            console.log('Refresh token is invalid or expired. Please re-authenticate.');
-        }
 
         res.json({ 
             success: false, 
@@ -193,68 +202,13 @@ app.use((err, req, res, next) => {
     });
 });
 
-// 首先定义 SCOPES
-const SCOPES = [
-    'https://mail.google.com/',
-    'https://www.googleapis.com/auth/gmail.send'
-];
-
-// 然后配置 OAuth2
-const oauth2Client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
-);
-
-// 添加错误处理的凭证设置
-oauth2Client.setCredentials({
-    refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
-    scope: SCOPES.join(' ')  // 添加 scope
-});
-
-// 添加 token 刷新事件监听
-oauth2Client.on('tokens', (tokens) => {
-    if (tokens.refresh_token) {
-        console.log('New refresh token received:', tokens.refresh_token);
-        // 存储新的 refresh token
-        process.env.GOOGLE_REFRESH_TOKEN = tokens.refresh_token;
-    }
-    console.log('Access token refreshed');
-});
-
-// 修改测试函数，只验证认证配置
-async function testGmailAPI() {
-    try {
-        console.log('Testing Gmail API configuration...');
-        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-        
-        // 只测试认证，获取用户信息
-        await oauth2Client.getAccessToken();
-        const profile = await gmail.users.getProfile({
-            userId: 'me'
-        });
-        
-        console.log('Gmail API test successful. Connected as:', profile.data.emailAddress);
-        return true;
-    } catch (error) {
-        console.error('Gmail API test failed:', {
-            message: error.message,
-            name: error.name,
-            response: error.response?.data
-        });
-        console.log('Please ensure your OAuth2 credentials are valid and refresh token is up to date');
-        return false;
-    }
-}
-
 // 修改端口配置，让它在本地开发和生产环境都能正常工作
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
     // 在生产环境中不显示端口信息
     if (process.env.NODE_ENV === 'production') {
         console.log('Server running in production mode');
     } else {
         console.log(`Server running on port ${PORT}`);
     }
-    await testGmailAPI();
-}); 
+});
