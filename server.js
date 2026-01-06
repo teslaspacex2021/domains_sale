@@ -1,16 +1,12 @@
 const express = require('express');
 const cors = require('cors');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();  // 加载.env文件
 
 // 添加环境变量检查
 console.log('Environment variables check:');
-console.log('EMAIL_HOST:', process.env.EMAIL_HOST ? '✓ Set' : '✗ Missing');
-console.log('EMAIL_PORT:', process.env.EMAIL_PORT ? '✓ Set' : '✗ Missing');
-console.log('EMAIL_USER:', process.env.EMAIL_USER ? '✓ Set' : '✗ Missing');
-console.log('EMAIL_PASSWORD:', process.env.EMAIL_PASSWORD ? '✓ Set' : '✗ Missing');
-console.log('EMAIL_FROM:', process.env.EMAIL_FROM ? '✓ Set' : '✗ Missing');
+console.log('RESEND_API_KEY:', process.env.RESEND_API_KEY ? '✓ Set' : '✗ Missing');
 console.log('RECEIVER_EMAIL:', process.env.RECEIVER_EMAIL ? '✓ Set' : '✗ Missing');
 
 const app = express();
@@ -18,6 +14,9 @@ const path = require('path');
 
 // 禁用 punycode 警告
 process.removeAllListeners('warning');
+
+// 初始化 Resend
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // 更详细的 CORS 配置
 const allowedOrigins = [
@@ -58,26 +57,6 @@ const limiter = rateLimit({
 
 // 应用 limiter 到邮件路由
 app.use('/send-email', limiter);
-
-// 创建 SMTP 邮件传输器
-const transporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
-    port: parseInt(process.env.EMAIL_PORT),
-    secure: true, // 使用 SSL
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD
-    }
-});
-
-// 验证 SMTP 连接
-transporter.verify(function(error, success) {
-    if (error) {
-        console.error('SMTP connection error:', error);
-    } else {
-        console.log('SMTP server is ready to send emails');
-    }
-});
 
 // 邮件发送路由
 app.post('/send-email', async (req, res) => {
@@ -123,43 +102,63 @@ app.post('/send-email', async (req, res) => {
             });
         }
 
-        // 构建邮件内容
-        const mailOptions = {
-            from: `"域名咨询" <${process.env.EMAIL_FROM}>`,
-            to: process.env.RECEIVER_EMAIL,
-            subject: '新域名购买咨询',
-            html: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                    <h2 style="color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px;">新域名购买咨询</h2>
-                    <table style="width: 100%; border-collapse: collapse;">
-                        <tr>
-                            <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold; width: 100px;">姓名:</td>
-                            <td style="padding: 10px; border-bottom: 1px solid #eee;">${name}</td>
-                        </tr>
-                        <tr>
-                            <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold;">邮箱:</td>
-                            <td style="padding: 10px; border-bottom: 1px solid #eee;"><a href="mailto:${email}">${email}</a></td>
-                        </tr>
-                        <tr>
-                            <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold;">电话:</td>
-                            <td style="padding: 10px; border-bottom: 1px solid #eee;">${phone || '未提供'}</td>
-                        </tr>
-                        <tr>
-                            <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold;">留言:</td>
-                            <td style="padding: 10px; border-bottom: 1px solid #eee;">${message}</td>
-                        </tr>
-                        <tr>
-                            <td style="padding: 10px; font-weight: bold;">发送时间:</td>
-                            <td style="padding: 10px;">${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</td>
-                        </tr>
-                    </table>
-                </div>
-            `
-        };
+        // 检查 API Key 是否存在
+        if (!process.env.RESEND_API_KEY) {
+            console.error('RESEND_API_KEY is not configured');
+            return res.json({ 
+                success: false, 
+                message: 'Email service not configured / 邮件服务未配置' 
+            });
+        }
 
-        // 发送邮件
-        const result = await transporter.sendMail(mailOptions);
-        console.log('Email sent successfully:', result.messageId);
+        // 构建邮件 HTML 内容
+        const htmlContent = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2 style="color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px;">新域名购买咨询</h2>
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold; width: 100px;">姓名:</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;">${name}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold;">邮箱:</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;"><a href="mailto:${email}">${email}</a></td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold;">电话:</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;">${phone || '未提供'}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold;">留言:</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;">${message}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 10px; font-weight: bold;">发送时间:</td>
+                        <td style="padding: 10px;">${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</td>
+                    </tr>
+                </table>
+            </div>
+        `;
+
+        // 使用 Resend 发送邮件
+        const { data, error } = await resend.emails.send({
+            from: 'Domain Inquiry <onboarding@resend.dev>',  // Resend 默认发件地址
+            to: process.env.RECEIVER_EMAIL || 'public@ubwan.com',
+            replyTo: email,  // 设置回复地址为用户邮箱
+            subject: `新域名购买咨询 - 来自 ${name}`,
+            html: htmlContent,
+        });
+
+        if (error) {
+            console.error('Resend API error:', error);
+            return res.json({ 
+                success: false, 
+                message: 'Failed to send email / 发送邮件失败，请稍后重试',
+                debug: process.env.NODE_ENV === 'development' ? error.message : undefined
+            });
+        }
+
+        console.log('Email sent successfully:', data.id);
         res.json({ success: true });
 
     } catch (error) {
