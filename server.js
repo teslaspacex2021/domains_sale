@@ -1,12 +1,14 @@
 const express = require('express');
 const cors = require('cors');
-const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();  // 加载.env文件
 
 // 添加环境变量检查
 console.log('Environment variables check:');
-console.log('RESEND_API_KEY:', process.env.RESEND_API_KEY ? '✓ Set' : '✗ Missing');
+console.log('EMAIL_HOST:', process.env.EMAIL_HOST ? '✓ Set' : '✗ Missing');
+console.log('EMAIL_USER:', process.env.EMAIL_USER ? '✓ Set' : '✗ Missing');
+console.log('EMAIL_PASSWORD:', process.env.EMAIL_PASSWORD ? '✓ Set (hidden)' : '✗ Missing');
 console.log('RECEIVER_EMAIL:', process.env.RECEIVER_EMAIL ? '✓ Set' : '✗ Missing');
 
 const app = express();
@@ -15,8 +17,25 @@ const path = require('path');
 // 禁用 punycode 警告
 process.removeAllListeners('warning');
 
-// 初始化 Resend
-const resend = new Resend(process.env.RESEND_API_KEY);
+// 创建 SMTP 传输器（腾讯企业邮箱）
+const transporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST,
+    port: parseInt(process.env.EMAIL_PORT) || 465,
+    secure: true, // 使用 SSL
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASSWORD
+    }
+});
+
+// 验证 SMTP 连接
+transporter.verify((error, success) => {
+    if (error) {
+        console.error('SMTP connection error:', error.message);
+    } else {
+        console.log('SMTP server is ready to send emails');
+    }
+});
 
 // 更详细的 CORS 配置
 const allowedOrigins = [
@@ -102,9 +121,9 @@ app.post('/send-email', async (req, res) => {
             });
         }
 
-        // 检查 API Key 是否存在
-        if (!process.env.RESEND_API_KEY) {
-            console.error('RESEND_API_KEY is not configured');
+        // 检查 SMTP 配置是否完整
+        if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
+            console.error('SMTP configuration is incomplete');
             return res.json({ 
                 success: false, 
                 message: 'Email service not configured / 邮件服务未配置' 
@@ -140,25 +159,18 @@ app.post('/send-email', async (req, res) => {
             </div>
         `;
 
-        // 使用 Resend 发送邮件
-        const { data, error } = await resend.emails.send({
-            from: 'Domain Inquiry <onboarding@resend.dev>',  // Resend 默认发件地址
+        // 使用 nodemailer 发送邮件
+        const mailOptions = {
+            from: `"域名咨询" <${process.env.EMAIL_FROM || process.env.EMAIL_USER}>`,
             to: process.env.RECEIVER_EMAIL || 'public@ubwan.com',
             replyTo: email,  // 设置回复地址为用户邮箱
             subject: `新域名购买咨询 - 来自 ${name}`,
             html: htmlContent,
-        });
+        };
 
-        if (error) {
-            console.error('Resend API error:', error);
-            return res.json({ 
-                success: false, 
-                message: 'Failed to send email / 发送邮件失败，请稍后重试',
-                debug: process.env.NODE_ENV === 'development' ? error.message : undefined
-            });
-        }
+        const info = await transporter.sendMail(mailOptions);
 
-        console.log('Email sent successfully:', data.id);
+        console.log('Email sent successfully:', info.messageId);
         res.json({ success: true });
 
     } catch (error) {
